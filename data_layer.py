@@ -70,7 +70,7 @@ class DataLayer:
         """List all CSV files in a GCS bucket.
         
         Args:
-            bucket_name: GCS bucket name (e.g., "datasets_blend")
+            bucket_name: GCS bucket name (e.g., "datsets_blend")
             prefix: Optional path prefix to filter files
             
         Returns:

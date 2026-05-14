@@ -10,6 +10,18 @@ from llm_client import LLMClient
 
 st.set_page_config(page_title="Retail Insights Assistant", layout="wide", page_icon="RI")
 
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_list_gcs_files(bucket_name: str) -> list[dict]:
+    """Cache GCS bucket listings for a short time."""
+    return data_layer.list_gcs_files(bucket_name)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_load_gcs_csv(gcs_uri: str) -> pd.DataFrame:
+    """Cache loaded GCS CSV files for repeated access during a session."""
+    return data_layer.load_csv_from_gcs(gcs_uri)
+
 st.markdown(
     """
     <style>
@@ -65,9 +77,27 @@ st.markdown(
 
 def load_input(data_layer: DataLayer) -> tuple[pd.DataFrame | None, str]:
     """Load input dataset from upload or GCS with dropdown for GCS files."""
-    input_mode = st.sidebar.selectbox("Input type", ["Upload file", "GCS URI"])
-    df = None
-    report_text = ""
+    if "df" not in st.session_state:
+        st.session_state.df = None
+    if "report_text" not in st.session_state:
+        st.session_state.report_text = ""
+    if "gcs_bucket" not in st.session_state:
+        st.session_state.gcs_bucket = os.getenv("DEFAULT_GCS_BUCKET", "datsets_blend")
+    if "gcs_uri" not in st.session_state:
+        st.session_state.gcs_uri = ""
+    if "gcs_loaded" not in st.session_state:
+        st.session_state.gcs_loaded = False
+
+    input_mode = st.sidebar.selectbox(
+        "Input type",
+        ["Upload file", "GCS URI"],
+        index=1,
+        key="input_type",
+        help="Select GCS URI to load shared datasets from cloud storage.",
+    )
+    st.sidebar.caption(
+        "For shared use, choose GCS URI so your manager can load files from a shared bucket instead of uploading locally."
+    )
 
     if input_mode == "Upload file":
         uploaded = st.sidebar.file_uploader(
@@ -77,66 +107,97 @@ def load_input(data_layer: DataLayer) -> tuple[pd.DataFrame | None, str]:
         if uploaded is not None:
             name = uploaded.name.lower()
             if name.endswith(".csv"):
-                df = pd.read_csv(uploaded)
+                st.session_state.df = pd.read_csv(uploaded)
             elif name.endswith(".xlsx"):
-                df = pd.read_excel(uploaded)
+                st.session_state.df = pd.read_excel(uploaded)
             elif name.endswith(".json"):
-                df = pd.read_json(uploaded)
+                st.session_state.df = pd.read_json(uploaded)
             else:
-                report_text = uploaded.getvalue().decode("utf-8", errors="replace")
-                df = pd.DataFrame({"report_text": [report_text]})
+                st.session_state.report_text = uploaded.getvalue().decode("utf-8", errors="replace")
+                st.session_state.df = pd.DataFrame({"report_text": [st.session_state.report_text]})
+            st.session_state.gcs_loaded = False
     else:
         # GCS mode with dropdown
         st.sidebar.write("**GCS Bucket Files**")
-        
-        # Option to select bucket
-        bucket_name = st.sidebar.text_input("GCS Bucket", value="datasets_blend", help="Bucket name without gs:// prefix")
-        
+        bucket_name = st.sidebar.text_input(
+            "GCS Bucket",
+            value=st.session_state.gcs_bucket,
+            key="gcs_bucket",
+            help="Shared GCS bucket name (no gs:// prefix). If the bucket exists, the app will list files automatically.",
+        )
+        st.sidebar.caption(
+            "If the app is deployed to Cloud Run with the correct service account, shared files can be loaded directly from GCS."
+        )
+
         # List files from bucket
         try:
             with st.spinner("Loading files from GCS..."):
-                gcs_files = data_layer.list_gcs_files(bucket_name)
-            
+                gcs_files = cached_list_gcs_files(bucket_name)
+
             if not gcs_files:
                 st.sidebar.warning(f"No files found in gs://{bucket_name}")
             else:
                 # Create dropdown with file names and sizes
                 file_options = [f"{f['name']} ({f['size_mb']} MB)" for f in gcs_files]
                 selected_file = st.sidebar.selectbox("Select file", file_options, key="gcs_file_select")
-                
+
                 if selected_file:
-                    # Get the full URI of selected file
                     selected_idx = file_options.index(selected_file)
-                    gcs_uri = gcs_files[selected_idx]['uri']
-                    
+                    gcs_uri = gcs_files[selected_idx]["uri"]
+
                     # Show the URI for reference
                     st.sidebar.text(f"URI: {gcs_uri}")
-                    
-                    # Load the file
-                    if st.sidebar.button("Load from GCS", type="primary"):
+
+                    if st.sidebar.button("Load from GCS", type="primary", key="load_gcs_button"):
                         with st.spinner("Loading CSV from GCS..."):
-                            df = data_layer.load_csv_from_gcs(gcs_uri)
-                            st.sidebar.success(f"✓ Loaded {len(df):,} rows")
+                            st.session_state.df = cached_load_gcs_csv(gcs_uri)
+                            st.session_state.report_text = ""
+                            st.session_state.gcs_uri = gcs_uri
+                            st.session_state.gcs_loaded = True
+                            st.sidebar.success(f"✓ Loaded {len(st.session_state.df):,} rows")
+                    elif st.session_state.gcs_uri == gcs_uri and st.session_state.gcs_loaded:
+                        st.sidebar.success(f"✓ Loaded {len(st.session_state.df):,} rows from cached GCS file")
         except Exception as e:
-            st.sidebar.error(f"Error accessing GCS: {str(e)}")
-            
+            st.sidebar.error(
+                "Error accessing GCS: {}. "
+                "Check that the bucket exists, the Cloud Run service account has storage permission, "
+                "and the bucket name is correct."
+                .format(str(e))
+            )
+
             # Fallback to manual URI entry
             st.sidebar.write("**Or enter URI manually:**")
-            gcs_uri = st.sidebar.text_input("GCS URI", placeholder="gs://bucket/path/file.csv")
-            if gcs_uri:
+            manual_gcs_uri = st.sidebar.text_input(
+                "GCS URI",
+                placeholder="gs://bucket/path/file.csv",
+                key="manual_gcs_uri",
+            )
+            if manual_gcs_uri and st.sidebar.button("Load URI", key="load_manual_gcs_button"):
                 with st.spinner("Loading CSV from GCS..."):
-                    df = data_layer.load_csv_from_gcs(gcs_uri)
+                    st.session_state.df = cached_load_gcs_csv(manual_gcs_uri)
+                    st.session_state.report_text = ""
+                    st.session_state.gcs_uri = manual_gcs_uri
+                    st.session_state.gcs_loaded = True
 
-    return df, report_text
+    return st.session_state.df, st.session_state.report_text
 
 
 
 def build_llm() -> LLMClient:
     st.sidebar.header("LLM")
-    llm_provider = st.sidebar.selectbox("Provider", ["vertex_ai", "openai"])
-    vertex_project = st.sidebar.text_input("Vertex project", value=os.getenv("GOOGLE_CLOUD_PROJECT", ""))
-    vertex_location = st.sidebar.text_input("Vertex location", value=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"))
-    vertex_model = st.sidebar.text_input("Vertex model", value=os.getenv("VERTEX_MODEL", "gemini-2.5-flash"))
+    llm_provider = st.sidebar.selectbox("Provider", ["vertex_ai", "openai"], index=0)
+    vertex_project = st.sidebar.text_input(
+        "Vertex project",
+        value=os.getenv("GOOGLE_CLOUD_PROJECT", "blend360-496117"),
+    )
+    vertex_location = st.sidebar.text_input(
+        "Vertex location",
+        value=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
+    )
+    vertex_model = st.sidebar.text_input(
+        "Vertex model",
+        value=os.getenv("VERTEX_MODEL", "gemini-2.5-flash"),
+    )
     openai_key = st.sidebar.text_input("OpenAI API Key", type="password")
     if openai_key:
         os.environ["OPENAI_API_KEY"] = openai_key

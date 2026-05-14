@@ -1,43 +1,84 @@
 # Retail Insights Assistant
 
-This repository contains the Streamlit retail analytics assistant demo along with deployment support files.
+Retail Insights Assistant is a Streamlit-based analytics demo designed to turn retail transaction data into business summaries, KPI insights, and conversational answers.
 
-## Purpose
+## What the application does
 
-- Keep the project source, deployment config, and documentation together.
-- Use GitHub as the source of truth for changes.
-- Maintain a clean branch and commit workflow.
+The application enables a user to provide retail sales data and then:
 
-## GitHub workflow
+- automatically detects the dataset schema and maps retail fields such as order date, revenue, quantity, category, location, fulfillment status, and courier status
+- computes core business KPIs for revenue, volume, average order value, cancellations, and top categories
+- generates an executive summary describing trends and anomalies
+- supports conversational questions about the dataset and answers them with validated analytics
+- preserves a clean, read-only query pipeline so generated queries are not allowed to modify data
 
-1. Make changes locally.
-2. Check the repository state with `git status`.
-3. Stage files with `git add <file>`.
-4. Commit with a concise message:
-   - `git commit -m "Update README with GitHub workflow"`
-5. Push to the remote repository:
-   - `git push origin main`
+## High-level architecture
 
-## Branching guidance
+The project is organized in three main layers:
 
-- Use `main` for stable updates and cleanup.
-- For larger changes, create a feature branch:
-  - `git checkout -b feature/<name>`
-- Push the branch and open a pull request if review is needed.
+1. User interface
+   - A Streamlit application provides the dashboard, chart views, summary card, and conversational prompt area.
+   - The UI is responsible for data upload selection, configuration values, and presenting results.
 
-## Local cleanup
+2. Data layer
+   - The data layer loads retail files, normalizes schema elements, and prepares the dataset for query execution.
+   - It detects key columns and builds helper fields for date, revenue, quantity, and category mapping.
+   - DuckDB is used as the analytics engine for fast, in-memory SQL queries over the loaded dataset.
 
-- The local `.venv` folder is ignored and should not be committed.
-- Keep temporary files such as `__pycache__`, `.DS_Store`, and environment files out of Git.
-- Use `.gitignore` to prevent local artifacts from entering the repository.
+3. Intelligence layer
+   - The intelligence layer uses a language model to generate summary text and to translate user questions into SQL queries.
+   - Query generation is validated to ensure only read-only analytics queries are executed.
+   - Results are converted back into natural language answers and suggestions.
 
-## VS Code Source Control
+## Application flow
 
-- The Source Control panel shows modified files and branch status.
-- Commit first, then push to update GitHub.
-- The branch indicator in the lower-left corner shows the active branch.
+The user-visible workflow proceeds as follows:
+
+- Data input: the user supplies a dataset.
+- Schema detection: the app identifies retail fields and labels them for analytics.
+- KPI calculation: core metrics are computed from the normalized dataset.
+- Summary generation: the system creates a business overview from the detected schema and KPI results.
+- Conversational analytics: a user question is translated into a SQL query, validated, executed, and answered.
+
+## Key components
+
+- `streamlit_app.py`: main application entrypoint and UI orchestration.
+- `data_layer.py`: dataset loading, schema normalization, and DuckDB preparation.
+- `llm_client.py`: language model client abstraction.
+- `agents.py` and `agent_graph.py`: orchestration of multi-step language and analytics processing.
+- `deploy.sh` and `Dockerfile`: container deployment support.
+- `test_runner.py`: repository smoke test harness.
+
+## Deployment model
+
+The expected deployment model is:
+
+- containerized Streamlit service running on a managed platform such as Cloud Run
+- Google Cloud Storage or a shared data bucket as the source for retail input files
+- Vertex AI or a comparable language model service for summary and question answering
+- a service account with permissions to read data and call model APIs
+
+## Design goals
+
+This project is designed to:
+
+- make retail analytics approachable for business users
+- validate all generated queries before execution
+- keep analytics read-only and transparent
+- separate UI, data preparation, and intelligence logic
+- allow the application to work with real retail data and cloud-hosted model services
+
+## Who should read this repository
+
+This README is intended for developers, product reviewers, and evaluators who want to understand:
+
+- the application purpose
+- the architecture and component responsibilities
+- the user workflow from dataset to insight
+- the deployment pattern without needing to execute any commands
 
 ## Notes
 
-- This README focuses on GitHub workflow rather than implementation details.
-- The repository is ready for continuous collaboration once changes are committed and pushed.
+- The repository is not limited to one dataset format; it is built to support retail-style CSVs and structured export files.
+- The application emphasizes schema detection, KPI extraction, and conversational analytics rather than raw data transformation.
+- The architecture is intentionally lightweight so the app can be deployed quickly while preserving an extensible analytics pipeline.
